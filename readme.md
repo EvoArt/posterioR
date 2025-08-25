@@ -1,0 +1,1 @@
+Simple MCMC sampler project to get up to speed with Rcpp
