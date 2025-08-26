@@ -1,4 +1,4 @@
-using LinearAlgebra, GLMakie, Distributions, ForwardDiff
+using LinearAlgebra, GLMakie, Distributions
 
 update_momentum(p,q,ϵ,∇U) = p .- (ϵ/2) * ∇U(q)
 update_position(p,q,ϵ,M⁻¹) = q .+ ϵ .* M⁻¹ * p
@@ -8,8 +8,13 @@ function update_pq!(p,q,ϵ,∇U,M⁻¹)
     p .= update_momentum(p,q,ϵ,∇U) 
 end
 
-U(x) = -sum(logpdf.(Normal(1,2),x))
-∇U(x) = ForwardDiff.gradient(input -> U(input),x)
+
+U(x,μ=1.0,σ =2.0) = -log(σ) + 0.5log(2π) + 0.5((x-μ)/σ)^2
+U(x::Array) = sum(U,x)
+
+∇U(x,μ=1.0,σ =2.0) = (x - μ) / σ^2
+∇U(x::Array) = ∇U.(x)
+
 function hmc_step(q,ϵ,L,M,M⁻¹,U,∇U,H,p_dist = MvNormal(M))
     q_proposal = copy(q)
     p = rand(p_dist) 
