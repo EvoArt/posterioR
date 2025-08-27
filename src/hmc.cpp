@@ -1,75 +1,126 @@
+// [[Rcpp::depends(RcppEigen)]]
+
 #include <Rcpp.h>
+#include <RcppEigen.h>
 #include <cmath> 
+#include <random>
+#include <functional>
+
 using namespace Rcpp;
+using namespace Eigen;
 
-// HMC bits converted from Julia
+// HMC bits converted from Julia 
 // negative log density
-double U(double x, double mu = 1.0, double sigma = 2.0) {
-    return -std::log(sigma) + 0.5 * std::log(2 * M_PI) 
-           + 0.5 * std::pow((x - mu) / sigma, 2);
-}
-// Gradient thereof
-double dU(double x, double mu = 1.0, double sigma = 2.0) {
-    return (x - mu) / (sigma * sigma);
+double U(const VectorXd& x, double mu = 1.0, double sigma = 2.0) {
+    double sum = 0.0;
+    for (int i = 0; i < x.size(); ++i) {
+        sum += -std::log(sigma) + 0.5 * std::log(2 * M_PI) 
+               + 0.5 * std::pow((x(i) - mu) / sigma, 2);
+    }
+    return sum;
 }
 
-//' Simple HMC Sampler
- //' 
- //' @param n_samples Number of MCMC samples to generate
- //' @param target_log_density R function that computes log density of target distribution
- //' @param initial_value Initial value for the chain
- //' @param proposal_sd Standard deviation for proposal distribution
- //' 
- //' @return List containing samples and acceptance rate
- //' @export
- // [[Rcpp::export]]
- List hmc(int n_samples, 
-                  Function target_log_density,
-                  double initial_value,
-                  double proposal_sd) {
-                    
-   
-   // Storage for samples
-   NumericVector samples(n_samples);
-   
-   // Initialize chain
-   double current_x = initial_value;
-   double current_log_dens = as<double>(target_log_density(current_x));
-   
-   // Counter for accepted proposals
-   int n_accepted = 0;
-   
-   // Main MCMC loop
-   for(int i = 0; i < n_samples; i++) {
-     
-     // Generate proposal: current + normal(0, proposal_sd)
-     double proposal = current_x + R::rnorm(0, proposal_sd);
-     
-     // Evaluate log density at proposal
-     double proposal_log_dens = as<double>(target_log_density(proposal));
-     
-     // Calculate acceptance probability (in log scale)
-     double log_alpha = proposal_log_dens - current_log_dens;
-     
-     // Accept or reject
-     if(log(R::runif(0, 1)) < log_alpha) {
-       // Accept the proposal
-       current_x = proposal;
-       current_log_dens = proposal_log_dens;
-       n_accepted++;
-     }
-     // If rejected, current_x stays the same
-     
-     // Store current state
-     samples[i] = current_x;
-   }
-   
-   // Calculate acceptance rate
-   double acceptance_rate = (double)n_accepted / n_samples;
-   
-   // Return results
-   return List::create(
-     Named("samples") = samples,
-     Named("acceptance_rate") = acceptance_rate
-   );
- }
+// gradient thereof
+VectorXd dU(const VectorXd& x, double mu = 1.0, double sigma = 2.0) {
+    VectorXd grad(x.size());
+    for (int i = 0; i < x.size(); ++i) {
+        grad(i) = (x(i) - mu) / (sigma * sigma);
+    }
+    return grad;
+}
+
+VectorXd hmc_step(const VectorXd& q,
+                  double epsilon,
+                  int L,
+                  const MatrixXd& M,
+                  const MatrixXd& inv_M,
+                  std::function<double(const VectorXd&)> U_func,
+                  std::function<VectorXd(const VectorXd&)> dU_func,
+                  std::normal_distribution<double>& p_dist,
+                  std::mt19937& rng) {
+    
+    VectorXd q_proposal = q;
+
+    VectorXd p(q.size());
+    for (int i = 0; i < p.size(); ++i) {
+        p(i) = p_dist(rng);
+    }
+
+    VectorXd inv_M_p = inv_M * p;
+    double kinetic_energy = 0.5 * p.dot(inv_M_p);
+    double H_curr = U_func(q) + kinetic_energy;
+
+    for (int l = 0; l < L; ++l) {
+
+        VectorXd grad_U = dU_func(q_proposal);
+        p -= 0.5 * epsilon * grad_U;
+
+        q_proposal += epsilon * p;
+
+        grad_U = dU_func(q_proposal);
+        p -= 0.5 * epsilon * grad_U;
+    }
+
+    VectorXd inv_M_p_proposal = inv_M * p;
+    double H_proposal = U_func(q_proposal) + 0.5 * p.dot(inv_M_p_proposal);
+
+    double prob = std::min(1.0, std::exp(H_curr - H_proposal));
+
+    std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
+    if (uniform_dist(rng) < prob) {
+        return q_proposal;
+    } else {
+        return q;
+    }
+}
+
+// convert MatrixXd to Rcpp::NumericMatrix
+Rcpp::NumericMatrix eigen_to_rcpp(const MatrixXd& eigen_mat) {
+    Rcpp::NumericMatrix rcpp_mat(eigen_mat.rows(), eigen_mat.cols());
+    for (int i = 0; i < eigen_mat.rows(); ++i) {
+        for (int j = 0; j < eigen_mat.cols(); ++j) {
+            rcpp_mat(i, j) = eigen_mat(i, j);
+        }
+    }
+    return rcpp_mat;
+}
+
+// main hmc func exposed t R
+// [[Rcpp::export]]
+Rcpp::NumericMatrix run_hmc(int n_iter = 1000,
+                           int dim = 1,
+                           double epsilon = 0.1,
+                           int L = 30,
+                           double mu = 1.0,
+                           double sigma = 2.0,
+                           int seed = 123) {
+
+    
+    std::mt19937 rng(seed);
+    std::normal_distribution<double> p_dist(0.0, 1.0);
+
+    MatrixXd M = MatrixXd::Identity(dim, dim);
+    MatrixXd inv_M = M.inverse();  
+
+    // lambda funcs
+    auto U_func = [mu, sigma](const VectorXd& x) { return U(x, mu, sigma); };
+    auto dU_func = [mu, sigma](const VectorXd& x) { return dU(x, mu, sigma); };
+
+    VectorXd q(dim);
+    for (int i = 0; i < dim; ++i) {
+        q(i) = p_dist(rng);
+    }
+
+    MatrixXd samples(n_iter, dim);
+    
+    // do hmc
+    for (int iter = 0; iter < n_iter; iter++) {
+        q = hmc_step(q, epsilon, L, M, inv_M, U_func, dU_func, p_dist, rng);
+        for (int col = 0; col < dim; col++) {
+            samples(iter, col) = q(col);
+        }
+    }
+    
+    // Convert to R matrix and return
+    return eigen_to_rcpp(samples);
+}
