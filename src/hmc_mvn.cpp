@@ -17,20 +17,20 @@ using namespace Eigen;
 
 // HMC bits converted from Julia 
 // negative log density
-double U(const VectorXd& x, double mu = 1.0, double sigma = 2.0) {
+double U(const VectorXd& x, VectorXd mu, VectorXd sigma) {
     double sum = 0.0;
     for (int i = 0; i < x.size(); ++i) {
-        sum += -std::log(sigma) + 0.5 * std::log(2 * M_PI) 
-               + 0.5 * std::pow((x(i) - mu) / sigma, 2);
+        sum += -std::log(sigma(i)) + 0.5 * std::log(2 * M_PI) 
+               + 0.5 * std::pow((x(i) - mu(i)) / sigma(i), 2);
     }
     return sum;
 }
 
 // gradient thereof
-VectorXd dU(const VectorXd& x, double mu = 1.0, double sigma = 2.0) {
+VectorXd dU(const VectorXd& x, VectorXd mu, VectorXd sigma) {
     VectorXd grad(x.size());
     for (int i = 0; i < x.size(); ++i) {
-        grad(i) = (x(i) - mu) / (sigma * sigma);
+        grad(i) = (x(i) - mu(i)) / (sigma(i) * sigma(i));
     }
     return grad;
 }
@@ -89,12 +89,11 @@ Rcpp::NumericMatrix eigen_to_rcpp(const MatrixXd& eigen_mat) {
 
 // main hmc func exposed t R
 // [[Rcpp::export]]
-Rcpp::NumericMatrix run_hmc(int n_iter = 1000,
-                           int dim = 1,
+Rcpp::NumericMatrix run_hmc(Rcpp::NumericVector mu_R = R_NilValue,
+                           Rcpp::NumericVector sigma_R = R_NilValue,
+                           int n_iter = 1000,
                            double epsilon = 0.1,
                            int L = 30,
-                           double mu = 1.0,
-                           double sigma = 2.0,
                            Rcpp::NumericMatrix P_R = R_NilValue,
                            Rcpp::NumericMatrix M_R = R_NilValue,
                            int seed = 123) {
@@ -103,9 +102,12 @@ Rcpp::NumericMatrix run_hmc(int n_iter = 1000,
     std::mt19937 rng(seed);
     std::normal_distribution<double> p_dist(0.0, 1.0);
 
+    VectorXd mu = Rcpp::as<VectorXd>(mu_R);
+    VectorXd sigma = Rcpp::as<VectorXd>(sigma_R);
     MatrixXd P = Rcpp::as<MatrixXd>(P_R);
     MatrixXd M = Rcpp::as<MatrixXd>(M_R);
     MatrixXd inv_M = M.inverse();  
+    int dim = mu.size();
 
     // lambda funcs
     auto U_func = [mu, sigma](const VectorXd& x) { return U(x, mu, sigma); };

@@ -1,29 +1,37 @@
+# load
 library(Rcpp)
+library(RcppEigen)
+library(mvtnorm)
+Rcpp::sourceCpp("src/hmc_mvn.cpp")
 
-# Compile the C++ 
-sourceCpp("src/simple_mcmc.cpp")
+# prep
+n_iter <- 1000
+M <- diag(dim)
+mu <- c(1.0,3.0)
+sigma <- c(1.0,2.0)
+dim <- length(mu)
+momenta <- rmvnorm(n_iter, mean = rep(0, dim), sigma = M)
 
-
-# targ Normal(mean=2, sd=1.5)
-normal_log_density <- function(x) {
-  dnorm(x, mean = 2, sd = 1.5, log = TRUE)
-}
-
-result <- simple_mcmc(
-  n_samples = 1000,
-  target_log_density = normal_log_density,
-  initial_value = 0,
-  proposal_sd = 1.0
+# run
+samples <- run_hmc(
+  mu = mu,
+  sigma = sigma,
+  n_iter = n_iter,
+  epsilon = 0.1,
+  L = 30,
+  P_R = P_samples,
+  M_R = M,
+  seed = 123
 )
 
-
-# res
-par(mfrow = c(1, 2))
-plot(result$samples, type = "l", main = "trace", 
-     xlab = "Iteration", ylab = "Value")
-hist(result$samples, main = "posterior", probability = TRUE)
-
-# Overlay true density
-x_range <- seq(min(result$samples), max(result$samples), length = 100)
-true_density <- dnorm(x_range, mean = 2, sd = 1.5)
-lines(x_range, true_density, col = "red", lwd = 2)
+# check
+par(mfrow = c(2, 2))
+for (i in 1:dim){
+  x <- samples[,i]
+  plot(x, type = "l", main = "trace", 
+       xlab = "Iteration", ylab = "Value")
+  hist(x, main = "posterior", probability = TRUE)
+  x_range <- seq(min(x), max(x), length = 100)
+  true_density <- dnorm(x_range, mean = mu[i], sd = sigma[i])
+  lines(x_range, true_density, col = "red", lwd = 2)
+}
